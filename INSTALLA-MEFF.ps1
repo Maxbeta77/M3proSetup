@@ -1,4 +1,4 @@
-﻿#requires -Version 5.1
+#requires -Version 5.1
 <#
 M3PRO - Installazione nuova macchina Windows x64.
 Scarica SEMPRE la release stable approvata dal portale (non il ramo Git).
@@ -84,6 +84,25 @@ function Test-VCRuntime {
     }
     return $true
 }
+function Find-Chrome {
+    $paths = @("$env:ProgramFiles\Google\Chrome\Application\chrome.exe", "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe", "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe")
+    foreach ($key in @('HKCU:\Software\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe', 'HKLM:\Software\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe')) {
+        if (Test-Path -LiteralPath $key) {
+            $registered = (Get-Item -LiteralPath $key).GetValue('')
+            if ($registered) { $paths += $registered.Trim('"') }
+        }
+    }
+    foreach ($candidate in $paths) {
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+    }
+    return $null
+}
+function Ensure-Chrome {
+    if (Find-Chrome) { Write-Host 'Google Chrome gia presente: installazione non necessaria.'; return }
+    Install-Winget 'Google.Chrome'
+    if (-not (Find-Chrome)) { throw 'Google Chrome non trovato dopo installazione. Completare Chrome e rilanciare il setup M3.' }
+    Write-Host 'Google Chrome installato e verificato.'
+}
 function Find-Python312 {
     $ErrorActionPreference = 'Continue'
     $paths = @("$env:LOCALAPPDATA\Programs\Python\Python312\python.exe", "$env:ProgramFiles\Python312\python.exe", 'C:\Python312\python.exe')
@@ -106,6 +125,7 @@ function Show-InstallationChecklist {
         [pscustomobject]@{Componente='Visual C++ x64'; Stato=$(if(Test-VCRuntime){'PRESENTE'}else{'MANCANTE'}); Azione='Runtime Microsoft necessario ai moduli PDF; installazione automatica'},
         [pscustomobject]@{Componente='Python 3.12 x64'; Stato=$(if($py){'PRESENTE'}else{'MANCANTE'}); Azione='Installazione automatica tramite winget'},
         [pscustomobject]@{Componente='Node.js / npm'; Stato=$(if(Get-Command npm.cmd -ErrorAction SilentlyContinue){'PRESENTE'}else{'MANCANTE'}); Azione='Installazione automatica tramite winget'},
+        [pscustomobject]@{Componente='Google Chrome'; Stato=$(if(Find-Chrome){'PRESENTE'}else{'MANCANTE'}); Azione='Installazione automatica se assente; Chrome esistente conservato'},
         [pscustomobject]@{Componente='winget'; Stato=$(if(Get-Command winget -ErrorAction SilentlyContinue){'PRESENTE'}else{'MANCANTE'}); Azione='Microsoft App Installer, richiesto per prerequisiti mancanti'},
         [pscustomobject]@{Componente='Wireshark / tshark'; Stato=$(if(Test-Path "$env:ProgramFiles\Wireshark\tshark.exe"){'PRESENTE'}else{'MANCANTE'}); Azione='Installazione tramite winget'},
         [pscustomobject]@{Componente='Nmap'; Stato=$(if((Test-Path "${env:ProgramFiles(x86)}\Nmap\nmap.exe") -or (Get-Command nmap.exe -ErrorAction SilentlyContinue)){'PRESENTE'}else{'MANCANTE'}); Azione='Installazione tramite winget'},
@@ -225,6 +245,8 @@ try {
     Set-SetupProgress 35 'Verifica e installazione Node.js'
     if (-not (Get-Command npm.cmd -ErrorAction SilentlyContinue)) { Install-Winget 'OpenJS.NodeJS.LTS' }
     if (-not (Get-Command npm.cmd -ErrorAction SilentlyContinue)) { throw 'Node.js/npm non disponibile.' }
+    Set-SetupProgress 38 'Verifica e installazione Google Chrome'
+    Ensure-Chrome
     if ((Test-Path $InstallRoot) -and @(Get-ChildItem -LiteralPath $InstallRoot -Force).Count -gt 0) {
         # Destinazione fissa verificata, fuori dalla cartella da archiviare; nessuna eliminazione.
         $Backup = 'C:\MEFF-sorgenti-' + [guid]::NewGuid().ToString('N')

@@ -32,3 +32,5 @@ Runtime Microsoft Visual C++ x64 per i PDF e avanzamento percentuale per fasi; i
 
 
 Setup 2026-10-07-4: collegamento M3PRO sul desktop pubblico, icona del prodotto e verifica del collegamento salvato. Il setup rispetta la sospensione del feed ufficiale: non installa release ritirate.
+
+Setup 2026-10-07-5: Google Chrome incluso nella checklist e installato tramite winget solo se assente. La presenza viene verificata prima di copiare i file M3. Il browser gia presente non viene reinstallato.
