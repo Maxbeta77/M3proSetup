@@ -29,3 +29,6 @@ La grafica e il controllo del download sono stati verificati. La prova di instal
 ## Setup 2026-10-07-3
 
 Runtime Microsoft Visual C++ x64 per i PDF e avanzamento percentuale per fasi; il 100% arriva dopo la verifica servizi. AVVIA.ps1 -ResumeIncomplete recupera solo una nuova installazione interrotta prima della configurazione. Confronta i file con la release ufficiale e conserva integralmente la cartella precedente. Rifiuta installazioni configurate o file aggiuntivi.
+
+
+Setup 2026-10-07-4: collegamento M3PRO sul desktop pubblico, icona del prodotto e verifica del collegamento salvato. Il setup rispetta la sospensione del feed ufficiale: non installa release ritirate.

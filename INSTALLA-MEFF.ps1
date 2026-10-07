@@ -285,11 +285,23 @@ try {
     if (-not (Test-Path "$env:WINDIR\System32\Npcap\wpcap.dll")) { $Notes.Add('Npcap: completare il driver di cattura da https://npcap.com/#download prima delle scansioni traffico.') }
     Set-SetupProgress 90 'Creazione collegamenti e configurazione avvio'
     $sh = New-Object -ComObject WScript.Shell
-    $link = $sh.CreateShortcut((Join-Path ([Environment]::GetFolderPath('CommonDesktopDirectory')) 'M3PRO.lnk'))
+    $desktop = [Environment]::GetFolderPath('CommonDesktopDirectory')
+    if (-not $desktop) { throw 'Desktop pubblico Windows non disponibile.' }
+    New-Item -ItemType Directory -Path $desktop -Force | Out-Null
+    $shortcutPath = Join-Path $desktop 'M3PRO.lnk'
+    $launcherPath = Join-Path $InstallRoot 'AVVIA-M3PRO.vbs'
+    if (-not (Test-Path -LiteralPath $launcherPath -PathType Leaf)) { throw 'Launcher M3PRO assente: impossibile creare il collegamento desktop.' }
+    $link = $sh.CreateShortcut($shortcutPath)
     $link.TargetPath = "$env:WINDIR\System32\wscript.exe"
-    $link.Arguments = '"C:\MEFF\AVVIA-M3PRO.vbs"'
+    $link.Arguments = '"' + $launcherPath + '"'
     $link.WorkingDirectory = $InstallRoot
+    $link.Description = 'Avvia M3PRO'
+    if (Test-Path -LiteralPath (Join-Path $InstallRoot 'icon.ico')) { $link.IconLocation = (Join-Path $InstallRoot 'icon.ico') + ',0' }
     $link.Save()
+    if (-not (Test-Path -LiteralPath $shortcutPath -PathType Leaf)) { throw 'Collegamento M3PRO non creato sul desktop pubblico.' }
+    $savedLink = $sh.CreateShortcut($shortcutPath)
+    if ($savedLink.Arguments -ne $link.Arguments -or $savedLink.TargetPath -ne $link.TargetPath) { throw 'Verifica collegamento desktop M3PRO non riuscita.' }
+    Write-Host "Collegamento desktop verificato: $shortcutPath"
     # Autostart silenzioso per l'utente corrente, senza rimuovere altri servizi.
     $vbs = @'
 Set sh=CreateObject("WScript.Shell")
