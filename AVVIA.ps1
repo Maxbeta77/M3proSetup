@@ -1,4 +1,4 @@
-﻿# M3PRO public setup launcher: no GitHub token required.
+# M3PRO public setup launcher: no GitHub token required.
 [CmdletBinding()]
 param([switch]$DownloadOnly, [switch]$CheckOnly)
 $ErrorActionPreference = 'Stop'
