@@ -3,7 +3,7 @@
 param([switch]$DownloadOnly, [switch]$CheckOnly)
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$uri = 'https://raw.githubusercontent.com/Maxbeta77/M3proSetup/setup-2026-10-07-1/INSTALLA-M3-GUI.ps1'
+$uri = 'https://raw.githubusercontent.com/Maxbeta77/M3proSetup/setup-2026-10-07-2/INSTALLA-M3-GUI.ps1'
 $expected = '9fb0c4917906600ce1831fe71a87dcbef3626a638d5071a05b4fe1763ddc9669'
 $destination = Join-Path $env:TEMP ('M3PRO-Setup-' + [guid]::NewGuid().ToString('N') + '.ps1')
 Invoke-WebRequest -UseBasicParsing -Uri $uri -OutFile $destination -TimeoutSec 120
