@@ -11,6 +11,7 @@ Un M3 gia' configurato deve usare Update: questo installer non lo sovrascrive.
 param(
     [switch]$CheckOnly,
     [switch]$ChecklistOnly,
+    [switch]$ResumeIncomplete,
     [string]$StatusFile = '',
     [string]$ConfigFile = '',
     [switch]$SkipExternalTools
@@ -27,6 +28,39 @@ $Work = Join-Path $env:TEMP ('M3-Setup-' + [guid]::NewGuid().ToString('N'))
 function Write-Utf8([string]$Path, [string]$Text) {
     [IO.File]::WriteAllText($Path, $Text, $Utf8)
 }
+$script:percent = 0
+$script:phase = 'Preparazione'
+$script:checklist = @()
+function Save-SetupStatus {
+    if ($StatusFile) {
+        Write-Utf8 $StatusFile (@{checklist=$script:checklist;log_directory=$Work;percent=$script:percent;phase=$script:phase;updated_at=[DateTime]::UtcNow.ToString('o')} | ConvertTo-Json -Depth 5)
+    }
+}
+function Set-SetupProgress([int]$Percent, [string]$Phase) {
+    $script:percent=$Percent; $script:phase=$Phase
+    Save-SetupStatus
+    Write-Host ("[{0}%] {1}" -f $Percent,$Phase)
+}
+function Assert-IncompleteSetup([string]$Root, [string]$Release) {
+    foreach ($name in @('backend\.env','m3-python-path.txt','installed_release.json','m3-update-local.json','.runtime','frontend\node_modules','sessions','reports','logs','licenses.json','license.json')) {
+        if (Test-Path (Join-Path $Root $name)) { throw "Recupero interrotto: dati o configurazione presenti ($name)." }
+    }
+    if (-not (Test-Path "$Root\.venv\Scripts\python.exe")) { throw 'Installazione parziale non riconosciuta.' }
+    if (@(Get-ChildItem -LiteralPath $Root -Recurse -Force -Attributes ReparsePoint -ErrorAction Stop).Count) { throw 'Recupero non consentito su collegamenti filesystem.' }
+    foreach ($file in Get-ChildItem -LiteralPath $Release -Recurse -File -Force) {
+        $relative=$file.FullName.Substring($Release.TrimEnd('\').Length+1)
+        if ($relative -eq 'INSTALLA-MEFF.ps1') { continue }
+        $existing=Join-Path $Root $relative
+        if (-not (Test-Path -LiteralPath $existing -PathType Leaf) -or (Get-FileHash -LiteralPath $existing).Hash -ne (Get-FileHash -LiteralPath $file.FullName).Hash) {
+            throw "Recupero non consentito: file diverso dalla release ufficiale ($relative)."
+        }
+    }
+    foreach ($file in Get-ChildItem -LiteralPath $Root -Recurse -File -Force) {
+        $relative=$file.FullName.Substring($Root.TrimEnd('\').Length+1)
+        if ($relative.StartsWith('.venv\') -or $relative -eq 'INSTALLA-MEFF.ps1') { continue }
+        if (-not (Test-Path -LiteralPath (Join-Path $Release $relative) -PathType Leaf)) { throw "Recupero non consentito: file aggiuntivo ($relative)." }
+    }
+}
 function Run-Checked([string]$Exe, [string[]]$Arguments) {
     $ErrorActionPreference = 'Continue' # Windows PowerShell: stderr non implica exit code != 0.
     & $Exe @Arguments
@@ -42,6 +76,13 @@ function Install-Winget([string]$Id) {
     }
     Run-Checked 'winget' @('install','--id',$Id,'--exact','--source','winget','--accept-source-agreements','--accept-package-agreements','--disable-interactivity')
     Refresh-Path
+}
+function Test-VCRuntime {
+    $system = Join-Path $env:WINDIR 'System32'
+    foreach ($dll in @('msvcp140.dll','vcruntime140.dll','vcruntime140_1.dll')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $system $dll) -PathType Leaf)) { return $false }
+    }
+    return $true
 }
 function Find-Python312 {
     $ErrorActionPreference = 'Continue'
@@ -62,6 +103,7 @@ function Show-InstallationChecklist {
     $py = Find-Python312
     $rows = @(
         [pscustomobject]@{Componente='Windows x64'; Stato=$(if([Environment]::Is64BitOperatingSystem){'OK'}else{'NON COMPATIBILE'}); Azione='Windows 10/11 x64'},
+        [pscustomobject]@{Componente='Visual C++ x64'; Stato=$(if(Test-VCRuntime){'PRESENTE'}else{'MANCANTE'}); Azione='Runtime Microsoft necessario ai moduli PDF; installazione automatica'},
         [pscustomobject]@{Componente='Python 3.12 x64'; Stato=$(if($py){'PRESENTE'}else{'MANCANTE'}); Azione='Installazione automatica tramite winget'},
         [pscustomobject]@{Componente='Node.js / npm'; Stato=$(if(Get-Command npm.cmd -ErrorAction SilentlyContinue){'PRESENTE'}else{'MANCANTE'}); Azione='Installazione automatica tramite winget'},
         [pscustomobject]@{Componente='winget'; Stato=$(if(Get-Command winget -ErrorAction SilentlyContinue){'PRESENTE'}else{'MANCANTE'}); Azione='Microsoft App Installer, richiesto per prerequisiti mancanti'},
@@ -75,9 +117,8 @@ function Show-InstallationChecklist {
     Write-Host "`nCHECKLIST INSTALLAZIONE M3PRO" -ForegroundColor Cyan
     $rows | Format-Table -AutoSize -Wrap | Out-Host
     Write-Utf8 (Join-Path $Work 'checklist.json') ($rows | ConvertTo-Json)
-    if ($StatusFile) {
-        Write-Utf8 $StatusFile (@{checklist=$rows;log_directory=$Work} | ConvertTo-Json -Depth 5)
-    }
+    $script:checklist=$rows
+    Save-SetupStatus
 }
 function Validate-Manifest($Manifest) {
     if ($Manifest.schema -ne 1 -or $Manifest.channel -ne 'stable' -or $Manifest.prerelease -ne $false -or
@@ -130,7 +171,7 @@ try {
         if ((Test-Path $InstallRoot) -and @(Get-ChildItem -LiteralPath $InstallRoot -Force).Count -gt 0) {
             $machineFiles = @('backend\.env','m3-python-path.txt','installed_release.json','m3-update-local.json','.venv','.runtime','frontend\node_modules','sessions','reports','logs','licenses.json','license.json')
             $configured = @($machineFiles | Where-Object { Test-Path (Join-Path $InstallRoot $_) }).Count -gt 0
-            if ($configured -or -not (Test-Path "$InstallRoot\.git")) {
+            if (($configured -or -not (Test-Path "$InstallRoot\.git")) -and -not $ResumeIncomplete) {
                 throw 'C:\MEFF contiene gia file di installazione. Per M3 installato usare Update. I dati esistenti non vengono sovrascritti.'
             }
         }
@@ -143,13 +184,14 @@ try {
         Stop-Transcript | Out-Null
         exit 0
     }
-    Write-Host 'Scarico e verifico ultima versione ufficiale M3PRO...'
+    Set-SetupProgress 5 'Scarico e verifico ultima versione ufficiale M3PRO...'
     $Manifest = Invoke-RestMethod -Uri "$Feed/m3pro-stable-manifest.json" -TimeoutSec 60
     Validate-Manifest $Manifest
     if ($Manifest.requires.os -and $Manifest.requires.os -ne 'windows') { throw 'Release non destinata a Windows.' }
     if ($Manifest.requires.python_minimum -and [version]$Manifest.requires.python_minimum -gt [version]'3.12.0') {
         throw 'La nuova release richiede un runtime superiore: aggiornare questo installer prima di proseguire.'
     }
+    Set-SetupProgress 10 'Download del pacchetto ufficiale... (attendere)'
     $Zip = Join-Path $Work $Manifest.zip_name
     # Il pacchetto deve provenire dallo stesso feed pubblico configurato.
     Invoke-WebRequest -UseBasicParsing -Uri "$Feed/$($Manifest.zip_name)" -OutFile $Zip -TimeoutSec 600
@@ -168,12 +210,19 @@ try {
         Stop-Transcript | Out-Null
         exit 0
     }
+    Set-SetupProgress 20 'Pacchetto verificato; controllo installazione precedente'
+    if ($ResumeIncomplete -and (Test-Path $InstallRoot) -and @(Get-ChildItem -LiteralPath $InstallRoot -Force).Count -gt 0) { Assert-IncompleteSetup $InstallRoot $Stage }
     if (Get-NetTCPConnection -State Listen -LocalPort 3000,5556,8001 -ErrorAction SilentlyContinue) {
         throw 'Una porta M3 e gia occupata. Nessun processo e stato arrestato: chiudere l applicazione interessata prima di installare.'
     }
+    Set-SetupProgress 25 'Installazione runtime Microsoft Visual C++ x64'
+    if (-not (Test-VCRuntime)) { Install-Winget 'Microsoft.VCRedist.2015+.x64' }
+    if (-not (Test-VCRuntime)) { throw 'Runtime Microsoft Visual C++ x64 non disponibile. Completare il runtime prima di installare M3.' }
+    Set-SetupProgress 30 'Verifica e installazione Python 3.12'
     $PythonBase = Find-Python312
     if (-not $PythonBase) { Install-Winget 'Python.Python.3.12'; $PythonBase = Find-Python312 }
     if (-not $PythonBase) { throw 'Python 3.12 x64 non trovato dopo installazione.' }
+    Set-SetupProgress 35 'Verifica e installazione Node.js'
     if (-not (Get-Command npm.cmd -ErrorAction SilentlyContinue)) { Install-Winget 'OpenJS.NodeJS.LTS' }
     if (-not (Get-Command npm.cmd -ErrorAction SilentlyContinue)) { throw 'Node.js/npm non disponibile.' }
     if ((Test-Path $InstallRoot) -and @(Get-ChildItem -LiteralPath $InstallRoot -Force).Count -gt 0) {
@@ -184,21 +233,25 @@ try {
         Move-Item -LiteralPath $InstallRoot -Destination $Backup
         Write-Host "Clone originale conservato in $Backup"
     }
+    Set-SetupProgress 40 'Preparazione file M3PRO'
     New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
     Get-ChildItem -LiteralPath $Stage -Force | Copy-Item -Destination $InstallRoot -Recurse
     # Conserva questo bootstrap corretto: lo ZIP puo contenere un installer precedente.
     Write-Utf8 (Join-Path $InstallRoot 'INSTALLA-MEFF.ps1') $BootstrapSource
-    Write-Host 'Preparo ambiente Python dedicato a M3...'
+    Set-SetupProgress 45 'Preparo ambiente Python dedicato a M3...'
     Run-Checked $PythonBase @('-m','venv',"$InstallRoot\.venv")
     $Python = "$InstallRoot\.venv\Scripts\python.exe"
     Run-Checked $Python @('-m','pip','install','--upgrade','pip')
     # Un unico resolver; non usare requirements.txt cloud (contiene pin incompatibili Windows).
     $Packages = @('fastapi==0.110.1','uvicorn==0.34.0','motor==3.7.0','pymongo==4.11.1','pydantic[email]==2.11.5','pydantic-settings==2.9.1','python-dotenv','PyJWT','python-jose[cryptography]','passlib','bcrypt==4.1.3','python-multipart','aiofiles','aiohttp','httpx>=0.28,<0.29','requests','qrcode','reportlab==4.4.4','Pillow==11.3.0','PyMuPDF','psutil==5.9.8','scapy==2.6.1','numpy==2.2.6','pandas==2.2.3','python-nmap','twilio','openai==1.99.9','litellm==1.78.0','google-genai==1.44.0','protobuf==5.29.5','boto3','PyYAML','python-dateutil','windows-curses','python-evtx','python-registry','mitmproxy==11.0.2','mvt==2.6.0','emergentintegrations==0.1.0','https://github.com/EC-DIGIT-CSIRC/sysdiagnose/archive/1180bcb8ac954db64980038ce714db2dad8a1832.zip')
+    Set-SetupProgress 50 'Installazione moduli Python (puo richiedere diversi minuti)'
     Run-Checked $Python (@('-m','pip','install','--extra-index-url','https://d33sy5i8bnduwe.cloudfront.net/simple/') + $Packages)
+    Set-SetupProgress 65 'Verifica moduli Python e motore PDF'
     Run-Checked $Python @('-m','pip','check')
     Run-Checked $Python @('-c','import uvicorn, fastapi, motor, pymongo, reportlab, scapy, psutil, sysdiagnose, mitmproxy, mvt, fitz, jwt; from emergentintegrations.llm.chat import LlmChat')
     Write-Utf8 "$InstallRoot\m3-python-path.txt" ($Python + "`n")
     # Solo il server statico: la UI e gia compilata e verificata nello ZIP ufficiale.
+    Set-SetupProgress 70 'Installazione interfaccia M3PRO'
     $Serve = Join-Path $Work 'static-server'
     New-Item -ItemType Directory -Path $Serve | Out-Null
     Run-Checked 'npm.cmd' @('install','--prefix',$Serve,'--no-audit','--no-fund','serve@14.2.4')
@@ -216,6 +269,7 @@ try {
     # Modulo legacy: nessuna compilazione C++ automatica sul PC del cliente.
     try { Run-Checked $Python @('-m','pip','install','--only-binary=:all:','netifaces==0.11.0') }
     catch { $Notes.Add('netifaces: wheel compatibile non disponibile; enumerazione rete tramite psutil. Il controllo strumenti PRO puo segnalarlo come mancante.') }
+    Set-SetupProgress 80 'Installazione strumenti di rete'
     if (-not $SkipExternalTools) {
         foreach ($tool in @(
             @{Id='WiresharkFoundation.Wireshark';Path="$env:ProgramFiles\Wireshark\tshark.exe"},
@@ -229,6 +283,7 @@ try {
         }
     } else { $Notes.Add('Installazione strumenti di rete saltata su richiesta.') }
     if (-not (Test-Path "$env:WINDIR\System32\Npcap\wpcap.dll")) { $Notes.Add('Npcap: completare il driver di cattura da https://npcap.com/#download prima delle scansioni traffico.') }
+    Set-SetupProgress 90 'Creazione collegamenti e configurazione avvio'
     $sh = New-Object -ComObject WScript.Shell
     $link = $sh.CreateShortcut((Join-Path ([Environment]::GetFolderPath('CommonDesktopDirectory')) 'M3PRO.lnk'))
     $link.TargetPath = "$env:WINDIR\System32\wscript.exe"
@@ -248,6 +303,7 @@ sh.Run Chr(34) & "C:\MEFF\.venv\Scripts\python.exe" & Chr(34) & " " & Chr(34) & 
     $startup.WorkingDirectory = $InstallRoot
     $startup.Save()
     Write-Utf8 "$InstallRoot\installed_release.json" (@{version=$Manifest.version;release_id=$Manifest.release_id;commit=$Manifest.commit;sha256=$Manifest.sha256;channel='stable';installed_at=[DateTime]::UtcNow.ToString('o')} | ConvertTo-Json)
+    Set-SetupProgress 95 'Avvio M3PRO e verifica servizi'
     Start-Process -FilePath $Python -ArgumentList '"C:\MEFF\m3_launcher.py" --mode app' -WorkingDirectory $InstallRoot -WindowStyle Hidden
     $Ready = $false
     for ($attempt=0; $attempt -lt 45; $attempt++) {
@@ -261,11 +317,14 @@ sh.Run Chr(34) & "C:\MEFF\.venv\Scripts\python.exe" & Chr(34) & " " & Chr(34) & 
     Write-Utf8 "$InstallRoot\ESITO-INSTALLAZIONE.txt" ($Notes -join "`r`n")
     Show-InstallationChecklist
     Copy-Item -LiteralPath (Join-Path $Work 'checklist.json') -Destination "$InstallRoot\CHECKLIST-INSTALLAZIONE.json" -Force
+    Set-SetupProgress 100 'M3PRO avviato: consultare il riepilogo dei componenti'
     Write-Host "M3PRO $($Manifest.version) avviato. Aggiornamenti successivi dal canale ufficiale."
     $Notes | ForEach-Object { Write-Host $_ -ForegroundColor Yellow }
     Stop-Transcript | Out-Null
     exit 0
 } catch {
+    $script:phase='Installazione interrotta: ' + $_.Exception.Message
+    try { Save-SetupStatus } catch {}
     Write-Host "INSTALLAZIONE NON COMPLETATA: $($_.Exception.Message)" -ForegroundColor Red
     Write-Host "Log e file diagnostici: $Work. Nessuna cartella esistente viene eliminata."
     try { Stop-Transcript | Out-Null } catch {}

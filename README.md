@@ -25,3 +25,7 @@ La finestra mostra la checklist e i dettagli reali dell'operazione. Non sovrascr
 `INSTALLA-M3-GUI.ps1 -CheckOnly`: apre la finestra di controllo con installazione disabilitata.
 
 La grafica e il controllo del download sono stati verificati. La prova di installazione completa su una macchina pulita resta necessaria.
+
+## Setup 2026-10-07-3
+
+Runtime Microsoft Visual C++ x64 per i PDF e avanzamento percentuale per fasi; il 100% arriva dopo la verifica servizi. AVVIA.ps1 -ResumeIncomplete recupera solo una nuova installazione interrotta prima della configurazione. Confronta i file con la release ufficiale e conserva integralmente la cartella precedente. Rifiuta installazioni configurate o file aggiuntivi.
